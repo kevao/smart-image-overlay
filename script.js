@@ -1,17 +1,17 @@
 (function () {
-  const SELECTORS = [
-    '.rwmb-image-item',
-    'li.attachment'
-  ];
 
-  const SIZE = 32;
-  const THRESHOLD = 140;
-  const TOLERANCE = 15;
-  const TRANSPARENCY_THRESHOLD = 0.08;
+
+  const CONFIG = {
+    SIZE: 32,
+    THRESHOLD: 140,
+    TOLERANCE: 15,
+    TRANSPARENCY_THRESHOLD: 0.08,
+    SMALL_IMAGE_THRESHOLD: 128
+  };
+
 
   const queue = new Set();
   const svgCache = new Map();
-
   let scheduled = false;
 
   function injectCSS() {
@@ -39,24 +39,6 @@
     document.head.appendChild(style);
   }
 
-  function cleanBackground(el) {
-    if (!el) return;
-
-    el.style.removeProperty('background');
-    el.style.removeProperty('background-color');
-    el.style.setProperty('background', 'none', 'important');
-  }
-
-  function cleanItem(item) {
-    cleanBackground(item);
-
-    const mb = item.querySelector('.rwmb-file-icon');
-    if (mb) cleanBackground(mb);
-
-    const wp = item.querySelector('.attachment-preview');
-    if (wp) cleanBackground(wp);
-  }
-
   function scheduleWork() {
     if (scheduled) return;
     scheduled = true;
@@ -64,15 +46,15 @@
     const runner = (deadline) => {
       scheduled = false;
 
-      let timeRemaining = deadline?.timeRemaining?.() ?? 5;
+      let time = deadline?.timeRemaining?.() ?? 5;
 
-      while (queue.size && timeRemaining > 0) {
+      while (queue.size && time > 0) {
         const item = queue.values().next().value;
         queue.delete(item);
 
         processItem(item);
 
-        timeRemaining = deadline?.timeRemaining?.() ?? 0;
+        time = deadline?.timeRemaining?.() ?? 0;
       }
 
       if (queue.size) scheduleWork();
@@ -93,6 +75,7 @@
     scheduleWork();
   }
 
+
   async function isSvgUsingCurrentColor(src) {
     if (svgCache.has(src)) return svgCache.get(src);
 
@@ -101,8 +84,8 @@
       const text = await res.text();
 
       const uses = text.includes('currentColor');
-
       svgCache.set(src, uses);
+
       return uses;
     } catch {
       svgCache.set(src, false);
@@ -110,16 +93,17 @@
     }
   }
 
+
   function analyzeImage(img) {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
 
-    canvas.width = SIZE;
-    canvas.height = SIZE;
+    canvas.width = CONFIG.SIZE;
+    canvas.height = CONFIG.SIZE;
 
     try {
-      ctx.drawImage(img, 0, 0, SIZE, SIZE);
-      const data = ctx.getImageData(0, 0, SIZE, SIZE).data;
+      ctx.drawImage(img, 0, 0, CONFIG.SIZE, CONFIG.SIZE);
+      const data = ctx.getImageData(0, 0, CONFIG.SIZE, CONFIG.SIZE).data;
 
       let sum = 0;
       let count = 0;
@@ -142,7 +126,11 @@
 
       const transparencyRatio = transparentCount / (totalPixels / 4);
 
-      if (transparencyRatio < TRANSPARENCY_THRESHOLD) {
+      const isSmall =
+        img.naturalWidth <= CONFIG.SMALL_IMAGE_THRESHOLD ||
+        img.naturalHeight <= CONFIG.SMALL_IMAGE_THRESHOLD;
+
+      if (transparencyRatio < CONFIG.TRANSPARENCY_THRESHOLD && !isSmall) {
         return null;
       }
 
@@ -150,11 +138,11 @@
 
       const avg = sum / count;
 
-      if (Math.abs(avg - THRESHOLD) < TOLERANCE) {
+      if (Math.abs(avg - CONFIG.THRESHOLD) < CONFIG.TOLERANCE) {
         return 'rgba(0,0,0,0.5)';
       }
 
-      return avg > THRESHOLD
+      return avg > CONFIG.THRESHOLD
         ? 'rgba(0,0,0,0.8)'
         : 'rgba(0,0,0,0.2)';
     } catch {
@@ -162,28 +150,67 @@
     }
   }
 
-  function resolveContainer(item) {
-    if (item.matches('.rwmb-image-item')) {
+
+  function cleanBackground(el) {
+    if (!el) return;
+
+    el.style.removeProperty('background');
+    el.style.removeProperty('background-color');
+    el.style.setProperty('background', 'none', 'important');
+  }
+
+  function cleanItem(item) {
+    cleanBackground(item);
+  }
+
+
+  const MetaBoxHandler = {
+    selector: '.rwmb-image-item',
+
+    resolve(item) {
       return {
         container: item,
         img: item.querySelector('img')
       };
-    }
+    },
 
-    if (item.matches('li.attachment')) {
+    clean(item) {
+      cleanBackground(item);
+      cleanBackground(item.querySelector('.rwmb-file-icon'));
+    }
+  };
+
+  const MediaLibraryHandler = {
+    selector: 'li.attachment',
+
+    resolve(item) {
       return {
         container: item.querySelector('.attachment-preview'),
         img: item.querySelector('img')
       };
-    }
+    },
 
-    return {};
+    clean(item) {
+      cleanBackground(item.querySelector('.attachment-preview'));
+    }
+  };
+
+  const HANDLERS = [MetaBoxHandler, MediaLibraryHandler];
+
+  function getHandler(item) {
+    return HANDLERS.find(h => item.matches(h.selector));
   }
+
 
   async function processItem(item) {
     if (item.dataset.overlayProcessed) return;
 
-    const { container, img } = resolveContainer(item);
+    const handler = getHandler(item);
+    if (!handler) return;
+
+    handler.clean(item);
+
+    const { container, img } = handler.resolve(item);
     if (!container || !img) return;
 
     const apply = async () => {
@@ -217,9 +244,10 @@
     }
   }
 
+
   function scan() {
-    SELECTORS.forEach(sel => {
-      document.querySelectorAll(sel).forEach(enqueue);
+    HANDLERS.forEach(h => {
+      document.querySelectorAll(h.selector).forEach(enqueue);
     });
   }
 
@@ -229,11 +257,11 @@
         for (const node of m.addedNodes) {
           if (!(node instanceof HTMLElement)) continue;
 
-          SELECTORS.forEach(sel => {
-            if (node.matches?.(sel)) {
+          HANDLERS.forEach(h => {
+            if (node.matches?.(h.selector)) {
               enqueue(node);
             } else {
-              node.querySelectorAll?.(sel).forEach(enqueue);
+              node.querySelectorAll?.(h.selector).forEach(enqueue);
             }
           });
         }
@@ -246,7 +274,9 @@
     });
   }
 
+
   injectCSS();
   scan();
   observe();
+
 })();
