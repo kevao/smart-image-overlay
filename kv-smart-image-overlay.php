@@ -3,7 +3,7 @@
 /**
  * Plugin Name: Smart Image Overlay
  * Description: Aplica overlay inteligente em thumbnails com base em brilho e transparência.
- * Version: 1.0
+ * Version: 1.0.1
  * Author: Kevin Villanova
  */
 
@@ -13,9 +13,9 @@ function sio_enqueue_admin_scripts($hook)
 {
   wp_enqueue_script(
     'smart-image-overlay',
-    plugin_dir_url(__FILE__) . 'script.js',
+    plugin_dir_url(__FILE__) . 'script.min.js',
     [],
-    '1.0',
+    '1.0.1',
     true
   );
 }
